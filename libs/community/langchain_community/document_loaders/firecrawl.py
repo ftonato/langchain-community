@@ -267,7 +267,6 @@ class FireCrawlLoader(BaseLoader):
         self.url = url
         self.mode = mode
         self.params = params or {}
-        self.params['integration'] = 'langchain'
 
     def lazy_load(self) -> Iterator[Document]:
         self.params['integration'] = 'langchain'
