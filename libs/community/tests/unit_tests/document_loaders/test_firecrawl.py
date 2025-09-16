@@ -101,8 +101,8 @@ class TestFireCrawlLoader:
         assert "extracted main contents" in docs[0].page_content
         assert "success" in docs[0].page_content
 
-        print("[EXTRACT] docs:", docs)
-        print("[EXTRACT] forwarded:", mock_client.extract.call_args.kwargs)
+        # print("[EXTRACT] docs:", docs)
+        # print("[EXTRACT] forwarded:", mock_client.extract.call_args.kwargs)
         return docs
 
     def test_crawl_mode_strips_maxdepth_and_supports_prompt(
@@ -146,13 +146,16 @@ class TestFireCrawlLoader:
 
         # print("[CRAWL] docs:", docs)
         # print("[CRAWL] forwarded:", forwarded_params)
+        return docs
 
     def test_map_mode_maps_legacy_sitemap_flags(
         self, mock_firecrawl: Tuple[MagicMock, MagicMock]
     ) -> List[Document]:
         """ignoreSitemap/sitemapOnly should map to `sitemap` in v2."""
         _, mock_client = mock_firecrawl
-        mock_client.map.return_value = {"links": ["https://example.com/a", "https://e.com/b"]}
+        mock_client.map.return_value = {
+            "links": ["https://example.com/a", "https://e.com/b"]
+        }
 
         # Case 1: explicit sitemap=skip
         params = {"sitemap": "skip"}
@@ -177,18 +180,21 @@ class TestFireCrawlLoader:
         forwarded_params = mock_client.map.call_args.kwargs
         assert forwarded_params.get("sitemap") == "only"
         # print("[MAP-2] forwarded:", forwarded_params)
+        return docs
 
     def test_map_mode_handles_links_object_response(
         self, mock_firecrawl: Tuple[MagicMock, MagicMock]
     ) -> List[Document]:
-        """Firecrawl v2 returns an object with `links` containing url/title/description."""
+        """Firecrawl v2 returns an object with `links` with url/title/description."""
         _, mock_client = mock_firecrawl
         mock_client.map.return_value = {
             "links": [
                 {
                     "url": "https://firecrawl.dev",
                     "title": "Firecrawl",
-                    "description": "Firecrawl is a platform for crawling and mapping websites.",
+                    "description": (
+                        "Firecrawl is a platform for crawling and mapping websites."
+                    ),
                 },
                 {
                     "url": "https://firecrawl.dev/blog",

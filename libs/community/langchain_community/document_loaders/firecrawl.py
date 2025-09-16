@@ -1,7 +1,6 @@
-import warnings
-import os
-from typing import Iterator, Literal, Optional, Any
 import dataclasses
+import os
+from typing import Any, Iterator, Literal, Optional
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
@@ -115,8 +114,11 @@ class FireCrawlLoader(BaseLoader):
             raise ValueError("Query must be provided for search mode")
 
         api_key = api_key or get_from_env("api_key", "FIRECRAWL_API_KEY")
-        # Ensure we never pass None for api_url (v2 client validates as str). Avoid get_from_env to prevent raising.
-        resolved_api_url = api_url or os.getenv("FIRECRAWL_API_URL") or "https://api.firecrawl.dev"
+        # Ensure we never pass None for api_url (v2 client validates as str).
+        # Avoid get_from_env to prevent raising.
+        resolved_api_url = (
+            api_url or os.getenv("FIRECRAWL_API_URL") or "https://api.firecrawl.dev"
+        )
         self.firecrawl = FirecrawlApp(api_key=api_key, api_url=resolved_api_url)
         self.url = url or ""
         self.mode = mode
@@ -126,6 +128,7 @@ class FireCrawlLoader(BaseLoader):
 
     def lazy_load(self) -> Iterator[Document]:
         # Prepare integration tag and filter params per method
+        firecrawl_docs: list[Any] = []
         if self.mode == "scrape":
             allowed = {
                 "formats",
@@ -178,9 +181,11 @@ class FireCrawlLoader(BaseLoader):
             crawl_response = self.firecrawl.crawl(self.url, **kwargs)
             # Support dict or object with 'data'
             if isinstance(crawl_response, dict):
-                firecrawl_docs = crawl_response.get("data", [])
+                data = crawl_response.get("data", [])
+                firecrawl_docs = list(data) if isinstance(data, list) else []
             else:
-                firecrawl_docs = getattr(crawl_response, "data", [])
+                data = getattr(crawl_response, "data", [])
+                firecrawl_docs = list(data) if isinstance(data, list) else []
         elif self.mode == "map":
             if not self.url:
                 raise ValueError("URL is required for map mode")
@@ -198,15 +203,14 @@ class FireCrawlLoader(BaseLoader):
             # Firecrawl v2 (>=4.3.6) returns an object with a `links` array
             # Fallback to legacy list response if needed
             if isinstance(map_response, dict):
-                firecrawl_docs = (
-                    map_response.get("links")
-                    if isinstance(map_response.get("links"), list)
-                    else map_response
-                )
+                links = map_response.get("links")
+                firecrawl_docs = list(links) if isinstance(links, list) else []
             elif hasattr(map_response, "links"):
-                firecrawl_docs = getattr(map_response, "links")
+                links = getattr(map_response, "links")
+                firecrawl_docs = list(links) if isinstance(links, list) else []
             else:
-                firecrawl_docs = map_response
+                is_list = isinstance(map_response, list)
+                firecrawl_docs = list(map_response) if is_list else []
         elif self.mode == "extract":
             if not self.url:
                 raise ValueError("URL is required for extract mode")
@@ -244,26 +248,46 @@ class FireCrawlLoader(BaseLoader):
             )
             # If SDK already returns a list[dict], use it directly
             if isinstance(search_data, list):
-                firecrawl_docs = search_data
+                firecrawl_docs = list(search_data)
             else:
                 # Normalize typed SearchData into list of dicts with markdown + metadata
                 results: list[dict[str, Any]] = []
                 containers = []
                 if isinstance(search_data, dict):
-                    containers = [search_data.get("web"), search_data.get("news"), search_data.get("images")]
+                    containers = [
+                        search_data.get("web"),
+                        search_data.get("news"),
+                        search_data.get("images"),
+                    ]
                 else:
                     containers = [
                         getattr(search_data, "web", None),
                         getattr(search_data, "news", None),
                         getattr(search_data, "images", None),
                     ]
-                for kind, items in (("web", containers[0]), ("news", containers[1]), ("images", containers[2])):
+                for kind, items in (
+                    ("web", containers[0]),
+                    ("news", containers[1]),
+                    ("images", containers[2]),
+                ):
                     if not items:
                         continue
                     for item in items:
-                        url_val = getattr(item, "url", None) if not isinstance(item, dict) else item.get("url")
-                        title_val = getattr(item, "title", None) if not isinstance(item, dict) else item.get("title")
-                        desc_val = getattr(item, "description", None) if not isinstance(item, dict) else item.get("description")
+                        url_val = (
+                            getattr(item, "url", None)
+                            if not isinstance(item, dict)
+                            else item.get("url")
+                        )
+                        title_val = (
+                            getattr(item, "title", None)
+                            if not isinstance(item, dict)
+                            else item.get("title")
+                        )
+                        desc_val = (
+                            getattr(item, "description", None)
+                            if not isinstance(item, dict)
+                            else item.get("description")
+                        )
                         content_val = desc_val or title_val or url_val or ""
                         metadata_val = {
                             k: v
@@ -277,7 +301,9 @@ class FireCrawlLoader(BaseLoader):
                             }.items()
                             if v is not None
                         }
-                        results.append({"markdown": content_val, "metadata": metadata_val})
+                        results.append(
+                            {"markdown": content_val, "metadata": metadata_val}
+                        )
                 firecrawl_docs = results
         else:
             raise ValueError(
@@ -288,11 +314,16 @@ class FireCrawlLoader(BaseLoader):
             if self.mode == "map":
                 # Support both legacy string list and v2 link objects
                 if isinstance(doc, str):
-                    page_content = doc
-                    metadata = {}
+                    page_content: str = doc
+                    meta: dict[str, Any] = {}
                 elif isinstance(doc, dict):
-                    page_content = doc.get("url") or doc.get("href") or ""
-                    metadata = {
+                    page_content_value = doc.get("url") or doc.get("href") or ""
+                    page_content = (
+                        page_content_value
+                        if isinstance(page_content_value, str)
+                        else str(page_content_value or "")
+                    )
+                    meta = {
                         k: v
                         for k, v in {
                             "title": doc.get("title"),
@@ -301,55 +332,78 @@ class FireCrawlLoader(BaseLoader):
                         if v is not None
                     }
                 elif hasattr(doc, "url") or hasattr(doc, "title"):
-                    page_content = getattr(doc, "url", "") or getattr(doc, "href", "")
-                    metadata = {}
+                    page_content_value = getattr(doc, "url", "") or getattr(
+                        doc, "href", ""
+                    )
+                    page_content = (
+                        page_content_value
+                        if isinstance(page_content_value, str)
+                        else str(page_content_value or "")
+                    )
+                    meta = {}
                     title = getattr(doc, "title", None)
                     description = getattr(doc, "description", None)
                     if title is not None:
-                        metadata["title"] = title
+                        meta["title"] = title
                     if description is not None:
-                        metadata["description"] = description
+                        meta["description"] = description
                 else:
                     page_content = str(doc)
-                    metadata = {}
+                    meta = {}
             elif self.mode == "extract":
-                page_content = doc
-                metadata = {}
+                page_content = str(doc)
+                meta = {}
             elif self.mode == "search":
                 # Already normalized to dicts with markdown/metadata above
                 if isinstance(doc, dict):
-                    page_content = doc.get("markdown") or ""
-                    metadata = doc.get("metadata", {})
+                    markdown_value = doc.get("markdown") or ""
+                    page_content = (
+                        markdown_value
+                        if isinstance(markdown_value, str)
+                        else str(markdown_value or "")
+                    )
+                    metadata_obj = doc.get("metadata", {})
+                    meta = metadata_obj if isinstance(metadata_obj, dict) else {}
                 else:
                     page_content = str(doc)
-                    metadata = {}
+                    meta = {}
             else:
                 if isinstance(doc, dict):
-                    page_content = (
+                    content_value = (
                         doc.get("markdown") or doc.get("html") or doc.get("rawHtml", "")
                     )
-                    metadata: Any = doc.get("metadata", {})
-                else:
                     page_content = (
+                        content_value
+                        if isinstance(content_value, str)
+                        else str(content_value or "")
+                    )
+                    meta = doc.get("metadata", {})
+                else:
+                    content_value = (
                         getattr(doc, "markdown", None)
                         or getattr(doc, "html", None)
                         or getattr(doc, "rawHtml", "")
                     )
-                    metadata = getattr(doc, "metadata", {}) or {}
+                    page_content = (
+                        content_value
+                        if isinstance(content_value, str)
+                        else str(content_value or "")
+                    )
+                    meta = getattr(doc, "metadata", {}) or {}
 
                 # Normalize metadata to plain dict for LangChain Document
-                if not isinstance(metadata, dict):
-                    if hasattr(metadata, "model_dump") and callable(metadata.model_dump):
-                        metadata = metadata.model_dump()
-                    elif dataclasses.is_dataclass(metadata):
-                        metadata = dataclasses.asdict(metadata)
-                    elif hasattr(metadata, "__dict__"):
-                        metadata = dict(vars(metadata))
+                if not isinstance(meta, dict):
+                    if hasattr(meta, "model_dump") and callable(meta.model_dump):
+                        meta = meta.model_dump()
+                    elif dataclasses.is_dataclass(meta):
+                        meta = dataclasses.asdict(meta)  # type: ignore[arg-type]
+                    elif hasattr(meta, "__dict__"):
+                        meta = dict(vars(meta))
                     else:
-                        metadata = {"value": str(metadata)}
+                        meta = {"value": str(meta)}
             if not page_content:
                 continue
             yield Document(
                 page_content=page_content,
-                metadata=metadata,
+                metadata=meta,
             )
